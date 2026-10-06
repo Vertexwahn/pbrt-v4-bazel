@@ -23,7 +23,7 @@
 
 #include <cuda.h>
 #include <cuda_runtime.h>
-#include <optix.h>
+#include <pbrt/gpu/vibeoptix/compat.h>
 
 namespace pbrt {
 

@@ -22,7 +22,6 @@ option (PBRT_DBG_LOGGING "Enable (very verbose!) debug logging" OFF)
 option (PBRT_NVTX "Insert NVTX annotations for NVIDIA Profiling and Debugging Tools" OFF)
 option (PBRT_NVML "Use NVML for GPU performance measurement" OFF)
 option (PBRT_USE_PREGENERATED_RGB_TO_SPECTRUM_TABLES "Use pregenerated rgbspectrum_*.cpp files rather than running rgb2spec_opt to generate them at build time" OFF)
-set (PBRT_OPTIX_PATH $ENV{PBRT_OPTIX_PATH} CACHE PATH "Path to OptiX SDK")
 set (PBRT_GPU_SHADER_MODEL "" CACHE STRING "")
 
 
@@ -210,18 +209,15 @@ of CUDA installed, please update your PATH.")
       message (SEND_ERROR "Unfortunately, pbrt-v4 triggers an internal compiler error in CUDA 11.3.0. Please either use CUDA 11.0-11.2 or 11.3.1 or later.")
     endif ()
 
-    if ("${PBRT_OPTIX_PATH}" STREQUAL "")
-        message (WARNING "Found CUDA but PBRT_OPTIX_PATH is not set. Disabling GPU compilation.")
-    else ()
-        enable_language (CUDA)
-        list (APPEND PBRT_DEFINITIONS "PBRT_BUILD_GPU_RENDERER")
-        if (PBRT_NVTX)
-            list (APPEND PBRT_DEFINITIONS "NVTX")
-        endif ()
-        if (PBRT_NVML)
-            list (APPEND PBRT_DEFINITIONS "PBRT_USE_NVML")
-        endif ()
-        set (PBRT_CUDA_ENABLED ON)
+    enable_language (CUDA)
+    list (APPEND PBRT_DEFINITIONS "PBRT_BUILD_GPU_RENDERER")
+    if (PBRT_NVTX)
+        list (APPEND PBRT_DEFINITIONS "NVTX")
+    endif ()
+    if (PBRT_NVML)
+        list (APPEND PBRT_DEFINITIONS "PBRT_USE_NVML")
+    endif ()
+    set (PBRT_CUDA_ENABLED ON)
 
         # FIXME
         include_directories (${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})  # for regular c++ compiles
@@ -285,10 +281,6 @@ of CUDA installed, please update your PATH.")
         endif ()
 
         set (PBRT_CUDA_LIB cuda)
-        # optix
-        # FIXME
-        include_directories (${PBRT_OPTIX_PATH}/include)
-
         # find CUDA's bin2c executable
         get_filename_component (cuda_compiler_bin "${CMAKE_CUDA_COMPILER}" DIRECTORY)
         find_program (BIN2C
@@ -347,7 +339,14 @@ of CUDA installed, please update your PATH.")
           else ()
             target_compile_definitions ("${lib_name}" PRIVATE ${PBRT_DEFINITIONS})
           endif ()
-          target_include_directories ("${lib_name}" PRIVATE src ${CMAKE_BINARY_DIR})
+          target_include_directories ("${lib_name}" PRIVATE
+                                      src
+                                      ${CMAKE_BINARY_DIR}
+                                      ${vibeoptix_SOURCE_DIR}/include)
+          if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            target_include_directories ("${lib_name}" PRIVATE
+                                        ${vibeoptix_SOURCE_DIR}/include/vibeoptix/glibc_cuda_compat)
+          endif ()
           target_include_directories ("${lib_name}" SYSTEM PRIVATE ${NANOVDB_INCLUDE})
           target_link_libraries ("${lib_name}" PRIVATE cuda_build_configuration pbrt_opt pbrt_warnings)
           add_dependencies ("${lib_name}" pbrt_soa_generated)
@@ -718,6 +717,18 @@ SET (PBRT_UTIL_SOURCE_HEADERS
   )
 
 if (PBRT_CUDA_ENABLED)
+  include (FetchContent)
+  FetchContent_Declare (
+    vibeoptix
+    GIT_REPOSITORY https://github.com/Vertexwahn/vibeoptix.git
+    GIT_TAG 00320d72dcca9316d202885ec62ddfd3735f71bd
+  )
+  FetchContent_GetProperties (vibeoptix)
+  if (NOT vibeoptix_POPULATED)
+    FetchContent_Populate (vibeoptix)
+    add_subdirectory (${vibeoptix_SOURCE_DIR} ${vibeoptix_BINARY_DIR} EXCLUDE_FROM_ALL)
+  endif ()
+
   set (PBRT_GPU_SOURCE
     src/pbrt/gpu/optix/aggregate.cpp
     src/pbrt/gpu/optix/denoiser.cpp
@@ -730,6 +741,7 @@ if (PBRT_CUDA_ENABLED)
     src/pbrt/gpu/cudagl.h
     src/pbrt/gpu/optix/denoiser.h
     src/pbrt/gpu/optix/scaler.h
+    src/pbrt/gpu/vibeoptix/compat.h
     src/pbrt/gpu/memory.h
     src/pbrt/gpu/optix/optix.h
     src/pbrt/gpu/util.h
@@ -882,6 +894,7 @@ set_property(TARGET pbrt_lib PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 target_include_directories (pbrt_lib PUBLIC
   src
   src/ext
+  src/ext/rply
   ${STB_INCLUDE}
   ${QOI_INCLUDE}
   ${ZLIB_INCLUDE_DIRS}
@@ -895,13 +908,14 @@ target_include_directories (pbrt_lib PUBLIC
   ${GLAD_INCLUDE}
 )
 
-if (PBRT_CUDA_ENABLED AND PBRT_OPTIX_PATH)
-    target_include_directories (pbrt_lib SYSTEM PUBLIC ${PBRT_OPTIX_PATH}/include)
-endif ()
-
 target_compile_options (pbrt_lib PUBLIC ${PBRT_CXX_FLAGS})
 
-target_link_libraries (pbrt_lib PRIVATE OpenEXR::OpenEXR pbrt_warnings pbrt_opt $<$<BOOL:PBRT_CUDA_ENABLED>:cuda_build_configuration>)
+target_link_libraries (pbrt_lib PRIVATE OpenEXR::OpenEXR pbrt_warnings pbrt_opt
+  $<$<BOOL:PBRT_CUDA_ENABLED>:cuda_build_configuration>
+  $<$<BOOL:PBRT_CUDA_ENABLED>:${CMAKE_DL_LIBS}>)
+if (PBRT_CUDA_ENABLED)
+  target_link_libraries (pbrt_lib PUBLIC VibeOptiX::VibeOptiX)
+endif ()
 
 add_sanitizers (pbrt_lib)
 
@@ -1002,7 +1016,7 @@ set_property (TARGET sky_lib PROPERTY FOLDER "ext")
 
 target_compile_definitions (imgtool PRIVATE ${PBRT_DEFINITIONS})
 target_compile_options (imgtool PRIVATE ${PBRT_CXX_FLAGS})
-target_include_directories (imgtool PRIVATE src src/ext ${FLIP_INCLUDE})
+target_include_directories (imgtool PRIVATE src src/ext)
 target_link_libraries (imgtool PRIVATE ${ALL_PBRT_LIBS} pbrt_opt pbrt_warnings sky_lib flip_lib)
 
 add_sanitizers (imgtool)

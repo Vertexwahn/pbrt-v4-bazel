@@ -94,9 +94,19 @@ set (NANOVDB_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/openvdb/nanovdb PARENT_SCOPE)
 ###########################################################################
 # FLIP
 
-set (FLIP_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/flip PARENT_SCOPE)
+include (FetchContent)
+FetchContent_Declare (
+    flip
+    GIT_REPOSITORY https://github.com/NVlabs/flip.git
+    GIT_TAG 79675788aa642fbb4732effe2b45b082ff4c4d52
+)
+FetchContent_GetProperties (flip)
+if (NOT flip_POPULATED)
+    FetchContent_Populate (flip)
+endif ()
 
-add_library (flip_lib STATIC ${CMAKE_CURRENT_SOURCE_DIR}/flip/flip.cpp)
+add_library (flip_lib INTERFACE)
+target_include_directories (flip_lib INTERFACE ${flip_SOURCE_DIR}/src/cpp)
 
 set_property (TARGET flip_lib PROPERTY FOLDER "ext")
 

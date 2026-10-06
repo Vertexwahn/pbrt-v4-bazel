@@ -1,0 +1,628 @@
+"""pbrt-v4 - physically based rendering system."""
+
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_cc//cc:cc_import.bzl", "cc_import")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+load("@rules_cuda//cuda:defs.bzl", "cuda_library", "requires_cuda")
+
+package(default_visibility = ["//visibility:public"])
+
+config_setting(
+    name = "dbg",
+    values = {"compilation_mode": "dbg"},
+)
+
+bool_flag(
+    name = "gpu",
+    build_setting_default = False,
+)
+
+config_setting(
+    name = "gpu_enabled",
+    flag_values = {":gpu": "true"},
+)
+
+GPU_TARGET_COMPATIBILITY = requires_cuda() + select({
+    ":gpu_enabled": [],
+    "//conditions:default": ["@platforms//:incompatible"],
+})
+
+# Mirrors PBRT_DEFINITIONS from the CMake build (the results of the
+# check_cxx_source_compiles() probes are hard-coded per platform here).
+PBRT_DEFINES = ["PTEX_STATIC"] + select({
+    "@platforms//os:windows": [
+        "PBRT_IS_WINDOWS",
+        "PBRT_IS_MSVC",
+        "NOMINMAX",
+        "_CRT_SECURE_NO_WARNINGS",
+        "_ENABLE_EXTENDED_ALIGNED_STORAGE",
+        "PBRT_HAS_INTRIN_H",
+        "PBRT_HAVE__ALIGNED_MALLOC",
+        "PBRT_NOINLINE=__declspec(noinline)",
+        "PBRT_RESTRICT=__restrict",
+    ],
+    "@platforms//os:macos": [
+        "PBRT_IS_OSX",
+        "PBRT_HAVE_MMAP",
+        "PBRT_HAVE_POSIX_MEMALIGN",
+        "PBRT_NOINLINE=__attribute__((noinline))",
+        "PBRT_RESTRICT=__restrict__",
+    ],
+    "//conditions:default": [
+        "PBRT_IS_LINUX",
+        "PBRT_HAVE_MMAP",
+        "PBRT_HAVE_POSIX_MEMALIGN",
+        "PBRT_NOINLINE=__attribute__((noinline))",
+        "PBRT_RESTRICT=__restrict__",
+    ],
+}) + select({
+    ":gpu_enabled": ["PBRT_BUILD_GPU_RENDERER"],
+    "//conditions:default": [],
+}) + select({
+    ":dbg": ["PBRT_DEBUG_BUILD"],
+    "//conditions:default": [],
+})
+
+PBRT_LINKOPTS = select({
+    "@platforms//os:windows": [
+        "-DEFAULTLIB:dbghelp.lib",
+        "-DEFAULTLIB:wsock32.lib",
+        "-DEFAULTLIB:ws2_32.lib",
+    ],
+    "@platforms//os:linux": [
+        "-pthread",
+        "-ldl",
+        "-rdynamic",
+    ],
+    "//conditions:default": ["-pthread"],
+})
+
+# ---------------------------------------------------------------------------
+# Code generators
+# ---------------------------------------------------------------------------
+
+# Structure-of-arrays code generator; emits the generated header on stdout.
+cc_binary(
+    name = "soac",
+    srcs = ["pbrt/cmd/soac.cpp"],
+)
+
+genrule(
+    name = "pbrt_soa_header",
+    srcs = ["pbrt/pbrt.soa"],
+    outs = ["pbrt_soa.h"],
+    cmd = "$(execpath :soac) $(execpath pbrt/pbrt.soa) > $@",
+    cmd_bat = "$(execpath :soac) $(execpath pbrt/pbrt.soa) > $@",
+    tools = [":soac"],
+)
+
+genrule(
+    name = "wavefront_workitems_soa_header",
+    srcs = ["pbrt/wavefront/workitems.soa"],
+    outs = ["wavefront_workitems_soa.h"],
+    cmd = "$(execpath :soac) $(execpath pbrt/wavefront/workitems.soa) > $@",
+    cmd_bat = "$(execpath :soac) $(execpath pbrt/wavefront/workitems.soa) > $@",
+    tools = [":soac"],
+)
+
+# Fits the RGB -> reflectance spectrum tables used by pbrt's colour handling.
+cc_binary(
+    name = "rgb2spec_opt",
+    srcs = ["pbrt/cmd/rgb2spec_opt.cpp"],
+    linkopts = select({
+        "@platforms//os:windows": [],
+        "//conditions:default": ["-pthread"],
+    }),
+)
+
+RGB_TO_SPECTRUM_TABLES = {
+    "aces": "ACES2065_1",
+    "dci_p3": "DCI_P3",
+    "rec2020": "REC2020",
+    "srgb": "sRGB",
+}
+
+[
+    genrule(
+        name = "rgbspectrum_%s_source" % name,
+        outs = ["rgbspectrum_%s.cpp" % name],
+        cmd = "$(execpath :rgb2spec_opt) 64 $@ " + colorspace,
+        cmd_bat = "$(execpath :rgb2spec_opt) 64 $@ " + colorspace,
+        tools = [":rgb2spec_opt"],
+    )
+    for name, colorspace in RGB_TO_SPECTRUM_TABLES.items()
+]
+
+# ---------------------------------------------------------------------------
+# pbrt library
+# ---------------------------------------------------------------------------
+
+CUDA_COPTS = ["-std=c++17"] + select({
+    # CCCL requires MSVC's standard-conforming preprocessor.
+    "@platforms//os:windows": ["-Xcompiler=/Zc:preprocessor"],
+    "//conditions:default": [],
+})
+
+# rules_cuda's default Windows runtime (cudart.lib) loads cudart64_13.dll at run
+# time, which is not available without a system-wide CUDA installation. Like
+# the CMake build, link the static runtime instead; .bazelrc selects this target
+# through --@rules_cuda//cuda:runtime on Windows.
+cc_import(
+    name = "cudart_static_windows",
+    static_library = "@cuda_cudart_windows_x86_64_13_2_2//:cudart/lib/x64/cudart_static.lib",
+    target_compatible_with = ["@platforms//os:windows"],
+)
+
+cc_library(
+    name = "cuda_runtime_static_windows",
+    target_compatible_with = ["@platforms//os:windows"],
+    deps = [
+        ":cudart_static_windows",
+        "@cuda//:cccl_headers",
+        "@cuda//:crt_headers",
+        "@cuda//:cudadevrt_lib",
+        "@cuda//:cudart_headers",
+        "@cuda//:nvcc_headers",
+    ],
+)
+
+GPU_COMPILED_SOURCES = [
+    "pbrt/bsdf.cpp",
+    "pbrt/bssrdf.cpp",
+    "pbrt/bxdfs.cpp",
+    "pbrt/cameras.cpp",
+    "pbrt/film.cpp",
+    "pbrt/filters.cpp",
+    "pbrt/interaction.cpp",
+    "pbrt/lights.cpp",
+    "pbrt/lightsamplers.cpp",
+    "pbrt/materials.cpp",
+    "pbrt/options.cpp",
+    "pbrt/pbrt.cpp",
+    "pbrt/samplers.cpp",
+    "pbrt/shapes.cpp",
+    "pbrt/textures.cpp",
+    "pbrt/util/bluenoise.cpp",
+    "pbrt/util/check.cpp",
+    "pbrt/util/color.cpp",
+    "pbrt/util/colorspace.cpp",
+    "pbrt/util/error.cpp",
+    "pbrt/util/log.cpp",
+    "pbrt/util/lowdiscrepancy.cpp",
+    "pbrt/util/math.cpp",
+    "pbrt/util/mesh.cpp",
+    "pbrt/util/noise.cpp",
+    "pbrt/util/pmj02tables.cpp",
+    "pbrt/util/primes.cpp",
+    "pbrt/util/pstd.cpp",
+    "pbrt/util/rng.cpp",
+    "pbrt/util/sampling.cpp",
+    "pbrt/util/scattering.cpp",
+    "pbrt/util/sobolmatrices.cpp",
+    "pbrt/util/spectrum.cpp",
+    "pbrt/util/stats.cpp",
+    "pbrt/util/transform.cpp",
+    "pbrt/util/vecmath.cpp",
+    "pbrt/wavefront/aggregate.cpp",
+    "pbrt/wavefront/camera.cpp",
+    "pbrt/wavefront/film.cpp",
+    "pbrt/wavefront/integrator.cpp",
+    "pbrt/wavefront/media.cpp",
+    "pbrt/wavefront/samples.cpp",
+    "pbrt/wavefront/surfscatter.cpp",
+    "pbrt/wavefront/subsurface.cpp",
+    "pbrt/wavefront/wavefront.cpp",
+    "pbrt/gpu/optix/aggregate.cpp",
+    "pbrt/gpu/optix/denoiser.cpp",
+    "pbrt/gpu/optix/scaler.cpp",
+    "pbrt/gpu/memory.cpp",
+    "pbrt/gpu/util.cpp",
+    "pbrt/cmd/pspec_gpu.cpp",
+]
+
+PBRT_DEPS = [
+    "@pbrt_external_deps//:glad",
+    "@rply//:rply",
+    "@double-conversion",
+    "@filesystem",
+    "@glfw",
+    "@googletest//:gtest",
+    "@libdeflate",
+    "@lodepng",
+    "@openexr",
+    "@openvdb//:nanovdb",
+    "@ptex",
+    "@qoi",
+    "@stb//:stb_image",
+    "@utf8proc",
+]
+
+cuda_library(
+    name = "pbrt_gpu_lib",
+    srcs = GPU_COMPILED_SOURCES + [":pbrt_embedded_ptx"],
+    hdrs = glob(["pbrt/**/*.h"]) + [
+        "pbrt_soa.h",
+        "wavefront_workitems_soa.h",
+    ],
+    copts = CUDA_COPTS + select({
+        "@platforms//os:linux": [
+            "-Iexternal/rules_cuda++toolchain+cuda_cccl_linux_x86_64_13_2_2/cccl/include/cccl",
+        ],
+        "@platforms//os:windows": [
+            "-Iexternal/rules_cuda++toolchain+cuda_cccl_windows_x86_64_13_2_2/cccl/include/cccl",
+        ],
+        "//conditions:default": [],
+    }),
+    defines = PBRT_DEFINES,
+    includes = ["."],
+    rdc = True,
+    target_compatible_with = GPU_TARGET_COMPATIBILITY,
+    deps = PBRT_DEPS + [
+        "@vibeoptix//:vibeoptix",
+        "@cuda",
+        "@nanovdb_headers//:cuda_compat",
+    ],
+    alwayslink = True,
+)
+
+genrule(
+    name = "pbrt_embedded_ptx",
+    srcs = [
+        "pbrt/gpu/optix/optix.cu",
+        "@vibeoptix//:include/vibeoptix/api.h",
+        "@vibeoptix//:include/vibeoptix/device_api.cuh",
+        "@vibeoptix//:include/vibeoptix/device_intrinsics.cuh",
+        "@vibeoptix//:include/vibeoptix/glibc_cuda_compat/bits/mathcalls.h",
+        "pbrt/util/color.cpp",
+        "pbrt/util/colorspace.cpp",
+        "pbrt/util/log.cpp",
+        "pbrt/util/noise.cpp",
+        "pbrt/util/spectrum.cpp",
+        "pbrt/util/transform.cpp",
+        ":pbrt_soa_header",
+        ":wavefront_workitems_soa_header",
+        "@cuda//:cuda_all_files",
+    ] + glob(["pbrt/**/*.h"]) + [
+        "@nanovdb_headers//:headers",
+    ],
+    outs = [
+        "pbrt_embedded_ptx.cpp",
+        "pbrt_optix.ptx",
+    ],
+    cmd = """
+CICC_PATH=external/rules_cuda++toolchain+cuda_nvvm_linux_x86_64_13_2_2/nvvm/nvvm/bin \
+NVVMIR_LIBRARY_DIR=external/rules_cuda++toolchain+cuda_nvvm_linux_x86_64_13_2_2/nvvm/nvvm/libdevice \
+$(execpath @cuda//:nvcc) --ptx -std=c++17 -arch=compute_75 --extended-lambda --expt-relaxed-constexpr \
+  -DPTEX_STATIC -DPBRT_BUILD_GPU_RENDERER -DPBRT_IS_LINUX \
+  -DPBRT_HAVE_MMAP -DPBRT_HAVE_POSIX_MEMALIGN \
+  -DPBRT_NOINLINE=__attribute__\\(\\(noinline\\)\\) \
+  -DPBRT_RESTRICT=__restrict__ \
+    -I external/rules_cuda++toolchain+cuda_cudart_linux_x86_64_13_2_2/cudart/include \
+    -I external/rules_cuda++toolchain+cuda_nvcc_linux_x86_64_13_2_2/nvcc/include \
+    -I external/rules_cuda++toolchain+cuda_cccl_linux_x86_64_13_2_2/cccl/include \
+    -I external/rules_cuda++toolchain+cuda_cccl_linux_x86_64_13_2_2/cccl/include/cccl \
+    -I external/rules_cuda++toolchain+cuda_crt_linux_x86_64_13_2_2/crt/include \
+  -I $$(dirname $$(dirname $(execpath @vibeoptix//:include/vibeoptix/device_api.cuh))) \
+  -I src -I $(@D) -I external/+http_archive+nanovdb_headers/nanovdb \
+  $(execpath pbrt/gpu/optix/optix.cu) -o $(@D)/pbrt_optix.ptx &&
+$(execpath @cuda//:bin2c) --name PBRT_EMBEDDED_PTX \
+  $(@D)/pbrt_optix.ptx > $(@D)/pbrt_embedded_ptx.cpp
+""",
+    cmd_bat = "$(execpath pbrt/cmd/pbrt_gpu_ptx.bat) $(execpath @cuda//:nvcc) $(execpath @cuda//:bin2c) $(execpath pbrt/gpu/optix/optix.cu) $(@D)/pbrt_optix.ptx $(@D)/pbrt_embedded_ptx.cpp $(execpath @vibeoptix//:include/vibeoptix/device_api.cuh)",
+    tools = [
+        "pbrt/cmd/pbrt_gpu_ptx.bat",
+        "@cuda//:bin2c",
+        "@cuda//:nvcc",
+    ],
+    target_compatible_with = GPU_TARGET_COMPATIBILITY,
+)
+
+cc_library(
+    name = "pbrt_lib",
+    srcs = select({
+        ":gpu_enabled": glob(
+            [
+                "pbrt/*.cpp",
+                "pbrt/cpu/*.cpp",
+                "pbrt/util/*.cpp",
+                "pbrt/wavefront/*.cpp",
+            ],
+            exclude = [
+                "**/*_test.cpp",
+                "pbrt/util/stbimage.cpp",
+            ] + GPU_COMPILED_SOURCES,
+        ),
+        "//conditions:default": glob(
+            [
+                "pbrt/*.cpp",
+                "pbrt/cpu/*.cpp",
+                "pbrt/util/*.cpp",
+                "pbrt/wavefront/*.cpp",
+            ],
+            exclude = [
+                "**/*_test.cpp",
+                "pbrt/util/stbimage.cpp",
+            ],
+        ),
+    }) + select({
+        ":gpu_enabled": [],
+        "//conditions:default": ["pbrt/cmd/pspec_gpu.cpp"],
+    }) + ["rgbspectrum_%s.cpp" % name for name in RGB_TO_SPECTRUM_TABLES],
+    hdrs = glob(["pbrt/**/*.h"]) + [
+        "pbrt_soa.h",
+        "wavefront_workitems_soa.h",
+    ],
+    defines = PBRT_DEFINES,
+    includes = ["."],
+    linkopts = PBRT_LINKOPTS,
+    deps = PBRT_DEPS + select({
+        ":gpu_enabled": [":pbrt_gpu_lib"],
+        "//conditions:default": [],
+    }),
+    alwayslink = select({
+        ":gpu_enabled": True,
+        "//conditions:default": False,
+    }),
+)
+
+# ---------------------------------------------------------------------------
+# Executables
+# ---------------------------------------------------------------------------
+
+cc_binary(
+    name = "pbrt",
+    srcs = ["pbrt/cmd/pbrt.cpp"],
+    deps = [":pbrt_lib"],
+)
+
+cc_binary(
+    name = "imgtool",
+    srcs = ["pbrt/cmd/imgtool.cpp"],
+    deps = [
+        ":pbrt_lib",
+        "@flip//:flip",
+        "@pbrt_external_deps//:skymodel",
+    ],
+)
+
+cc_binary(
+    name = "pspec",
+    srcs = ["pbrt/cmd/pspec.cpp"],
+    deps = [":pbrt_lib"],
+)
+
+cc_binary(
+    name = "plytool",
+    srcs = ["pbrt/cmd/plytool.cpp"],
+    deps = [":pbrt_lib"],
+)
+
+cc_binary(
+    name = "nanovdb2pbrt",
+    srcs = ["pbrt/cmd/nanovdb2pbrt.cpp"],
+    deps = [":pbrt_lib"],
+)
+
+cc_binary(
+    name = "cyhair2pbrt",
+    srcs = ["pbrt/cmd/cyhair2pbrt.cpp"],
+)
+
+# ---------------------------------------------------------------------------
+# Unit tests
+# ---------------------------------------------------------------------------
+
+cc_library(
+    name = "pbrt_test_main",
+    srcs = ["pbrt/cmd/pbrt_test_main.cpp"],
+    deps = [
+        ":pbrt_lib",
+        "@googletest//:gtest",
+    ],
+    alwayslink = True,
+)
+
+cc_test(
+    name = "pbrt_bsdfs_test",
+    size = "enormous",
+    srcs = ["pbrt/bsdfs_test.cpp"],
+    deps = [":pbrt_test_main"],
+)
+
+cc_test(
+    name = "pbrt_filters_test",
+    size = "enormous",
+    srcs = ["pbrt/filters_test.cpp"],
+    deps = [":pbrt_test_main"],
+)
+
+cc_test(
+    name = "pbrt_lights_test",
+    size = "enormous",
+    srcs = ["pbrt/lights_test.cpp"],
+    deps = [":pbrt_test_main"],
+)
+
+cc_test(
+    name = "pbrt_lightsamplers_test",
+    size = "enormous",
+    srcs = ["pbrt/lightsamplers_test.cpp"],
+    deps = [":pbrt_test_main"],
+)
+
+cc_test(
+    name = "pbrt_media_test",
+    size = "enormous",
+    srcs = ["pbrt/media_test.cpp"],
+    deps = [":pbrt_test_main"],
+)
+
+cc_test(
+    name = "pbrt_parser_test",
+    size = "enormous",
+    srcs = ["pbrt/parser_test.cpp"],
+    deps = [":pbrt_test_main"],
+)
+
+cc_test(
+    name = "pbrt_samplers_test",
+    size = "enormous",
+    srcs = ["pbrt/samplers_test.cpp"],
+    deps = [":pbrt_test_main"],
+)
+
+cc_test(
+    name = "pbrt_shapes_test",
+    size = "enormous",
+    srcs = ["pbrt/shapes_test.cpp"],
+    deps = [":pbrt_test_main"],
+)
+
+cc_test(
+    name = "pbrt_cpu_integrators_test",
+    size = "enormous",
+    srcs = ["pbrt/cpu/integrators_test.cpp"],
+    deps = [":pbrt_test_main"],
+)
+
+cc_test(
+    name = "pbrt_util_args_test",
+    size = "enormous",
+    srcs = ["pbrt/util/args_test.cpp"],
+    deps = [":pbrt_test_main"],
+)
+
+cc_test(
+    name = "pbrt_util_buffercache_test",
+    size = "enormous",
+    srcs = ["pbrt/util/buffercache_test.cpp"],
+    deps = [":pbrt_test_main"],
+)
+
+cc_test(
+    name = "pbrt_util_color_test",
+    size = "enormous",
+    srcs = ["pbrt/util/color_test.cpp"],
+    deps = [":pbrt_test_main"],
+)
+
+cc_test(
+    name = "pbrt_util_containers_test",
+    size = "enormous",
+    srcs = ["pbrt/util/containers_test.cpp"],
+    deps = [":pbrt_test_main"],
+)
+
+cc_test(
+    name = "pbrt_util_file_test",
+    size = "enormous",
+    srcs = ["pbrt/util/file_test.cpp"],
+    deps = [":pbrt_test_main"],
+)
+
+cc_test(
+    name = "pbrt_util_float_test",
+    size = "enormous",
+    srcs = ["pbrt/util/float_test.cpp"],
+    deps = [":pbrt_test_main"],
+)
+
+cc_test(
+    name = "pbrt_util_hash_test",
+    size = "enormous",
+    srcs = ["pbrt/util/hash_test.cpp"],
+    deps = [":pbrt_test_main"],
+)
+
+cc_test(
+    name = "pbrt_util_image_test",
+    size = "enormous",
+    srcs = ["pbrt/util/image_test.cpp"],
+    deps = [":pbrt_test_main"],
+)
+
+cc_test(
+    name = "pbrt_util_math_test",
+    size = "enormous",
+    srcs = ["pbrt/util/math_test.cpp"],
+    deps = [":pbrt_test_main"],
+)
+
+cc_test(
+    name = "pbrt_util_parallel_test",
+    size = "enormous",
+    srcs = ["pbrt/util/parallel_test.cpp"],
+    deps = [":pbrt_test_main"],
+)
+
+cc_test(
+    name = "pbrt_util_print_test",
+    size = "enormous",
+    srcs = ["pbrt/util/print_test.cpp"],
+    deps = [":pbrt_test_main"],
+)
+
+cc_test(
+    name = "pbrt_util_pstd_test",
+    size = "enormous",
+    srcs = ["pbrt/util/pstd_test.cpp"],
+    deps = [":pbrt_test_main"],
+)
+
+cc_test(
+    name = "pbrt_util_rng_test",
+    size = "enormous",
+    srcs = ["pbrt/util/rng_test.cpp"],
+    deps = [":pbrt_test_main"],
+)
+
+cc_test(
+    name = "pbrt_util_sampling_test",
+    size = "enormous",
+    srcs = ["pbrt/util/sampling_test.cpp"],
+    deps = [":pbrt_test_main"],
+)
+
+cc_test(
+    name = "pbrt_util_spectrum_test",
+    size = "enormous",
+    srcs = ["pbrt/util/spectrum_test.cpp"],
+    deps = [":pbrt_test_main"],
+)
+
+cc_test(
+    name = "pbrt_util_splines_test",
+    size = "enormous",
+    srcs = ["pbrt/util/splines_test.cpp"],
+    deps = [":pbrt_test_main"],
+)
+
+cc_test(
+    name = "pbrt_util_string_test",
+    size = "enormous",
+    srcs = ["pbrt/util/string_test.cpp"],
+    deps = [":pbrt_test_main"],
+)
+
+cc_test(
+    name = "pbrt_util_taggedptr_test",
+    size = "enormous",
+    srcs = ["pbrt/util/taggedptr_test.cpp"],
+    deps = [":pbrt_test_main"],
+)
+
+cc_test(
+    name = "pbrt_util_transform_test",
+    size = "enormous",
+    srcs = ["pbrt/util/transform_test.cpp"],
+    deps = [":pbrt_test_main"],
+)
+
+cc_test(
+    name = "pbrt_util_vecmath_test",
+    size = "enormous",
+    srcs = ["pbrt/util/vecmath_test.cpp"],
+    deps = [":pbrt_test_main"],
+)

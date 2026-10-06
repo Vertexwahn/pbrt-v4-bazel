@@ -1,0 +1,38 @@
+name: bazel-build-and-test
+
+on:
+  push:
+    paths-ignore:
+      - '**.md'
+      - 'images/**'
+  pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'images/**'
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build and test with Bazel
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout pbrt
+        uses: actions/checkout@v7
+        with:
+          submodules: true
+
+      - name: Set up Bazel
+        uses: bazel-contrib/setup-bazel@0.19.1
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}
+          repository-cache: true
+
+      - name: Build
+        run: bazel build //src:all
+
+      - name: Test
+        run: bazel test //src:all

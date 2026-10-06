@@ -1,0 +1,15 @@
+diff --git a/BUILD.bazel b/BUILD.bazel
+index 0000000..0000000 100644
+--- a/BUILD.bazel
++++ b/BUILD.bazel
+@@ -3,9 +3,10 @@
+ cc_library(
+     name = "rply",
+     srcs = [
+         "rply.c",
+         "rplyfile.h",
+     ],
+     hdrs = ["rply.h"],
++    includes = ["."],
+     visibility = ["//visibility:public"],
+ )

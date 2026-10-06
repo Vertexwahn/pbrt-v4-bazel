@@ -12,7 +12,7 @@
 #include <pbrt/util/stats.h>
 #include <pbrt/util/transform.h>
 
-#include <rply/rply.h>
+#include <rply.h>
 
 namespace pbrt {
 

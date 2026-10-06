@@ -184,14 +184,18 @@ these capabilities are only available via CUDA and OptiX on NVIDIA GPUs
 today, though we'd be happy to see pbrt running on any other GPUs that
 provide those capabilities.
 
-pbrt's GPU path currently requires CUDA 11.0 or later and OptiX 7.1 or
-later.  Both Linux and Windows are supported.
+pbrt's GPU device program requires CUDA and the NVIDIA driver. The independent
+[VibeOptiX library](https://github.com/Vertexwahn/vibeoptix) provides the OptiX
+driver API without requiring the OptiX SDK headers or an OptiX developer
+account. pbrt consumes it as a Bazel module and a pinned CMake dependency. The
+host-side ABI targets OptiX 9 function-table ABI 105. A full-resolution,
+one-sample-per-pixel render of the BMW M6 scene has been validated on an NVIDIA
+RTX 3090. Broader scene-feature and performance testing is still needed.
 
 The build scripts automatically attempt to find a CUDA compiler, looking in
 the usual places; the cmake output will indicate whether it was successful.
-It is necessary to manually set the cmake `PBRT_OPTIX_PATH` configuration
-option to point at an OptiX installation.  By default, the GPU shader model
-that pbrt targets is set automatically based on the GPU in the system.
+By default, the GPU shader model that pbrt targets is set automatically based
+on the GPU in the system.
 Alternatively, the `PBRT_GPU_SHADER_MODEL` option can be set manually
 (e.g., `-DPBRT_GPU_SHADER_MODEL=sm_80`).
 
@@ -200,6 +204,49 @@ the `--gpu` command-line option is given.  Note that when rendering with
 the GPU, the `--spp` command-line flag can be helpful to easily crank up
 the number of samples per pixel. Also, it's extra fun to use *tev* to watch
 rendering progress.
+
+### Bazel GPU build
+
+The `Vertexwahn/vibeoptix` Bazel module supplies SDK-independent OptiX host
+declarations and device intrinsic bindings. The GPU device source no longer
+includes `optix_device.h`, and the Bazel GPU build no longer downloads or
+requires the OptiX SDK. pbrt's ray tracing calls use OptiX 9 hit-object
+traversal and invocation via inline PTX; the removed legacy `_optix_trace`
+intrinsic is not used.
+
+The Bazel GPU build remains opt-in. The module declares CUDA 13.2.2 Linux
+x86-64 and Windows x86-64 redistributables, so Bazel fetches the
+compiler/toolkit components without requiring a system CUDA installation.
+CUDA 13.2 is the first release that supports Visual Studio 2026; Windows builds
+support Visual Studio 2019, 2022, and 2026 with the MSVC C++ tools. Set
+`BAZEL_VS` to the supported Visual Studio installation root when multiple
+versions are installed, and pass it through to Bazel with
+`--repo_env=BAZEL_VS --action_env=BAZEL_VS`. On Windows, the CUDA runtime is
+linked statically and VibeOptiX loads `nvoptix.dll` from the display driver's
+directory, so no CUDA DLLs need to be on `PATH`.
+
+The NVIDIA driver must expose OptiX ABI 105 and support CUDA 13.2 (R595 driver
+branch or newer), since the driver's OptiX compiler has to accept the PTX
+emitted by nvcc 13.2. For example, for an RTX 3090:
+
+```bash
+bazel build -c opt \
+  --//src:gpu --@rules_cuda//cuda:archs=compute_86:compute_86,sm_86 //:pbrt
+bazel run -c opt \
+  --//src:gpu --@rules_cuda//cuda:archs=compute_86:compute_86,sm_86 \
+  //:pbrt -- --gpu --display-server localhost:14158 scene.pbrt
+```
+
+For a different GPU, change the CUDA architecture flag to match that GPU. On
+Windows, the flag may be omitted to compile for the GPU of the build machine
+(`-arch=native`):
+
+```powershell
+bazel run -c opt --//src:gpu=true --repo_env=BAZEL_VS --action_env=BAZEL_VS `
+  //:pbrt -- --gpu --display-server localhost:14158 scene.pbrt
+```
+
+The default Bazel configuration remains CPU-only.
 
 The imgtool program that is built as part of pbrt provides support for the
 OptiX denoiser in the GPU build.  The denoiser is capable of operating on

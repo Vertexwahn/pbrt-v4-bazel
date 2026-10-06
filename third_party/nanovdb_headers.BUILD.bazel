@@ -1,0 +1,18 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "headers",
+    srcs = glob([
+        "nanovdb/nanovdb/*.h",
+        "nanovdb/nanovdb/**/*.h",
+        "nanovdb/nanovdb/**/*.cuh",
+    ]),
+)
+
+cc_library(
+    name = "cuda_compat",
+    hdrs = [":headers"],
+    includes = ["nanovdb"],
+)

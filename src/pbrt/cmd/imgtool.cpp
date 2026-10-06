@@ -42,9 +42,10 @@ extern "C" {
 #include <cstdio>
 #include <cstdlib>
 #include <map>
+#include <memory>
 #include <string>
 
-#include <flip.h>
+#include <FLIP.h>
 
 using namespace pbrt;
 
@@ -1183,7 +1184,6 @@ int diff(std::vector<std::string> args) {
         }
 
         errorImage = Image(PixelFormat::Float, image.Resolution(), {"Error"});
-        FLIPOptions opt; /* use defaults for now */
         image = image.ConvertToFormat(PixelFormat::Float);
         refImage = refImage.ConvertToFormat(PixelFormat::Float);
 
@@ -1196,10 +1196,16 @@ int diff(std::vector<std::string> args) {
                                         Clamp(refImage.GetChannel({x, y}, c), 0, 1));
                 }
 
-        ComputeFLIPError((float *)image.RawPointer({0, 0}),
-                         (float *)refImage.RawPointer({0, 0}),
-                         (float *)errorImage.RawPointer({0, 0}), image.Resolution().x,
-                         image.Resolution().y, opt);
+        FLIP::Parameters parameters;
+        float *flipErrorBuffer = nullptr;
+        float meanFLIPError = -1;
+        FLIP::evaluate(static_cast<const float *>(refImage.RawPointer({0, 0})),
+                       static_cast<const float *>(image.RawPointer({0, 0})),
+                       image.Resolution().x, image.Resolution().y, false, parameters,
+                       false, false, meanFLIPError, &flipErrorBuffer);
+        std::unique_ptr<float[]> flipError(flipErrorBuffer);
+        std::copy_n(flipError.get(), image.Resolution().x * image.Resolution().y,
+                    static_cast<float *>(errorImage.RawPointer({0, 0})));
 
         for (int c = 0; c < image.NChannels(); ++c)
             error[c] = 0;

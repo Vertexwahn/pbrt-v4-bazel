@@ -1,0 +1,131 @@
+"""pbrt-v4 - https://github.com/mmp/pbrt-v4"""
+
+module(
+    name = "pbrt",
+    version = "4.0.0",
+)
+
+bazel_dep(name = "bazel_skylib", version = "1.9.2")
+bazel_dep(name = "platforms", version = "1.1.0")
+bazel_dep(name = "rules_cc", version = "0.2.27")
+bazel_dep(name = "rules_cuda", version = "0.2.5")
+bazel_dep(name = "rules_license", version = "1.0.0")
+bazel_dep(name = "vibeoptix", version = "0.1.0")
+
+git_override(
+    module_name = "vibeoptix",
+    remote = "https://github.com/Vertexwahn/vibeoptix.git",
+    commit = "00320d72dcca9316d202885ec62ddfd3735f71bd",
+)
+
+# C++ libraries
+bazel_dep(name = "double-conversion", version = "3.3.1.bcr.1")
+bazel_dep(name = "glfw", version = "3.4.0.bcr.3")
+bazel_dep(name = "googletest", version = "1.18.0.bcr.1")
+bazel_dep(name = "libdeflate", version = "1.26")
+bazel_dep(name = "lodepng", version = "0.0.0-20250506-17d08dd")
+bazel_dep(name = "openexr", version = "3.5.1")
+bazel_dep(name = "openvdb", version = "11.0.0.bcr.1")
+bazel_dep(name = "ptex", version = "2.5.4")
+bazel_dep(name = "qoi", version = "0.0.0-20260927-ffb2d2c")
+bazel_dep(name = "flip", version = "1.6")
+bazel_dep(name = "rply", version = "1.1.4")
+bazel_dep(name = "stb", version = "0.0.0-20251026-f1c79c0")
+bazel_dep(name = "utf8proc", version = "2.12.0")
+bazel_dep(name = "zlib", version = "1.3.2")
+
+# The BCR release predates the Bazel 9 CcInfo load path and disabled-toolkit
+# targets needed by this repository.
+archive_override(
+    module_name = "rules_cuda",
+    integrity = "sha256-EWr9fveRnwsMDZDb1BHHTAQ9KGOwVVhaR53Wo+N6oBE=",
+    strip_prefix = "rules_cuda-d12c4eafdc08d474590ff9217bbc5a8566690ffd",
+    url = "https://github.com/bazel-contrib/rules_cuda/archive/d12c4eafdc08d474590ff9217bbc5a8566690ffd.tar.gz",
+)
+
+single_version_override(
+    module_name = "rply",
+    patches = ["//third_party:rply_includes.patch"],
+    patch_strip = 1,
+)
+
+single_version_override(
+    module_name = "flip",
+    patches = ["//third_party:flip_bazel9.patch"],
+    patch_strip = 1,
+)
+
+cuda = use_extension("@rules_cuda//cuda:extensions.bzl", "toolchain")
+
+# CUDA 13.2 is the first release whose nvcc accepts Visual Studio 2026 (MSVC
+# 14.5x). The driver's OptiX compiler must understand the emitted PTX ISA, so
+# the NVIDIA driver has to support CUDA 13.2 or newer.
+cuda.redist_json(
+    name = "cuda_13_2_2_linux",
+    components = [
+        "cudart",
+        "nvcc",
+        "nvvm",
+        "cccl",
+        "crt",
+        "culibos",
+    ],
+    platforms = ["linux-x86_64"],
+    version = "13.2.2",
+)
+
+# culibos is not shipped for Windows.
+cuda.redist_json(
+    name = "cuda_13_2_2_windows",
+    components = [
+        "cudart",
+        "nvcc",
+        "nvvm",
+        "cccl",
+        "crt",
+    ],
+    platforms = ["windows-x86_64"],
+    version = "13.2.2",
+)
+cuda.toolkit(name = "cuda")
+use_repo(cuda, "cuda", "cuda_cudart_windows_x86_64_13_2_2")
+
+# ---------------------------------------------------------------------------
+# Dependencies that need repository-local Bazel overlays or BUILD metadata.
+# ---------------------------------------------------------------------------
+
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
+
+# These dependency files match the pinned upstream PBRT revision. The sparse
+# checkout keeps only the two third-party source trees needed by Bazel.
+git_repository(
+    name = "pbrt_external_deps",
+    build_file = "//third_party:pbrt_ext.BUILD.bazel",
+    commit = "b0bdf461ba5dd6504b70ebf0932acc0fe7aa744f",
+    remote = "https://github.com/mmp/pbrt-v4.git",
+    sparse_checkout_patterns = [
+        "src/ext/glad",
+        "src/ext/skymodel",
+    ],
+)
+
+# The OpenVDB module keeps its NanoVDB header filegroup private. The PTX
+# genrule needs those headers as direct inputs, so expose them through a
+# lightweight archive overlay.
+http_archive(
+    name = "nanovdb_headers",
+    build_file = "//third_party:nanovdb_headers.BUILD.bazel",
+    integrity = "sha256-tpD0SXj1yDEF8vwQwvZKbdVGSPBRwZYGfbOWDiCGIWo=",
+    strip_prefix = "openvdb-6c044e628a1ac3546eed48b6f5e9c76dfaa2143e",
+    url = "https://github.com/AcademySoftwareFoundation/openvdb/archive/6c044e628a1ac3546eed48b6f5e9c76dfaa2143e.tar.gz",
+)
+
+# Header-only path handling library by Wenzel Jakob. Upstream has no releases.
+http_archive(
+    name = "filesystem",
+    build_file = "//third_party:filesystem.BUILD.bazel",
+    integrity = "sha256-+jgAuRxJlR0L5zlnFvahkbBUDHzdoJtCP+ekIXByiak=",
+    strip_prefix = "filesystem-c5f9de30142453eb3c6fe991e82dfc2583373116",
+    url = "https://github.com/wjakob/filesystem/archive/c5f9de30142453eb3c6fe991e82dfc2583373116.tar.gz",
+)

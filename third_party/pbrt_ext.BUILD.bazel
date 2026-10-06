@@ -1,0 +1,29 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "glad",
+    srcs = ["src/ext/glad/src/glad.c"],
+    hdrs = [
+        "src/ext/glad/include/KHR/khrplatform.h",
+        "src/ext/glad/include/glad/glad.h",
+    ],
+    includes = ["src/ext/glad/include"],
+    linkopts = select({
+        "@platforms//os:linux": ["-ldl"],
+        "//conditions:default": [],
+    }),
+)
+
+cc_library(
+    name = "skymodel",
+    srcs = ["src/ext/skymodel/ArHosekSkyModel.c"],
+    hdrs = [
+        "src/ext/skymodel/ArHosekSkyModel.h",
+        "src/ext/skymodel/ArHosekSkyModelData_CIEXYZ.h",
+        "src/ext/skymodel/ArHosekSkyModelData_RGB.h",
+        "src/ext/skymodel/ArHosekSkyModelData_Spectral.h",
+    ],
+    includes = ["src/ext"],
+)

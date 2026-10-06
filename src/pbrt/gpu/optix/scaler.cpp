@@ -11,8 +11,7 @@
 #include <cuda_runtime.h>
 #include <array>
 
-#include <optix.h>
-#include <optix_stubs.h>
+#include <pbrt/gpu/vibeoptix/compat.h>
 
 #define OPTIX_CHECK(EXPR)                                                           \
     do {                                                                            \
@@ -40,11 +39,11 @@ Scaler::Scaler(Vector2i resolution, bool haveAlbedoAndNormal)
     OPTIX_CHECK(optixDeviceContextCreate(cudaContext, 0, &optixContext));
 
     OptixDenoiserOptions options = {};
-#if (OPTIX_VERSION >= 80000)
+#if (VIBEOPTIX_API_VERSION >= 80000)
     options.denoiseAlpha = OPTIX_DENOISER_ALPHA_MODE_COPY;
 #endif
 
-#if (OPTIX_VERSION >= 70300)
+#if (VIBEOPTIX_API_VERSION >= 70300)
     if (haveAlbedoAndNormal)
         options.guideAlbedo = options.guideNormal = 1;
 
@@ -105,9 +104,9 @@ void Scaler::Scale(RGB *rgb, Normal3f *n, RGB *albedo, RGB *result) {
         CUdeviceptr(scratchBuffer), memorySizes.withoutOverlapScratchSizeInBytes));
 
     OptixDenoiserParams params = {};
-#if (OPTIX_VERSION >= 80000)
+#if (VIBEOPTIX_API_VERSION >= 80000)
     // denoiseAlpha is moved to OptixDenoiserOptions in OptiX 8.0
-#elif (OPTIX_VERSION >= 70500)
+#elif (VIBEOPTIX_API_VERSION >= 70500)
     params.denoiseAlpha = OPTIX_DENOISER_ALPHA_MODE_COPY;
 #else
     params.denoiseAlpha = 0;
@@ -115,14 +114,14 @@ void Scaler::Scale(RGB *rgb, Normal3f *n, RGB *albedo, RGB *result) {
     params.hdrIntensity = CUdeviceptr(intensity);
     params.blendFactor = 0;  // TODO what should this be??
 
-#if (OPTIX_VERSION >= 70300)
-    OptixDenoiserGuideLayer guideLayer;
+#if (VIBEOPTIX_API_VERSION >= 70300)
+    OptixDenoiserGuideLayer guideLayer = {};
     if (haveAlbedoAndNormal) {
         guideLayer.albedo = inputLayers[1];
         guideLayer.normal = inputLayers[2];
     }
 
-    OptixDenoiserLayer layers;
+    OptixDenoiserLayer layers = {};
     layers.input = inputLayers[0];
     layers.output = outputImage;
 

@@ -26,7 +26,8 @@
 #include <pbrt/util/spectrum.cpp>
 #include <pbrt/util/transform.cpp>
 
-#include <optix_device.h>
+#include <vibeoptix/device_api.cuh>
+#include <vibeoptix/device_intrinsics.cuh>
 
 #include <utility>
 
@@ -97,7 +98,7 @@ struct ClosestHitContext {
 };
 
 extern "C" __global__ void __raygen__findClosest() {
-    int rayIndex(optixGetLaunchIndex().x);
+    int rayIndex(vibeoptix::device::launchIndexX());
     if (rayIndex >= params.rayQueue->Size())
         return;
 
@@ -124,7 +125,7 @@ extern "C" __global__ void __miss__noop() {
 
 static __forceinline__ __device__ void ProcessClosestIntersection(
     SurfaceInteraction intr) {
-    int rayIndex = optixGetLaunchIndex().x;
+    int rayIndex = vibeoptix::device::launchIndexX();
 
     Medium rayMedium = getPayload<ClosestHitContext>()->rayMedium;
     if (intr.mediumInterface)
@@ -246,7 +247,7 @@ extern "C" __global__ void __anyhit__shadowTriangle() {
 // Shadow rays
 
 extern "C" __global__ void __raygen__shadow() {
-    int index = optixGetLaunchIndex().x;
+    int index = vibeoptix::device::launchIndexX();
     if (index >= params.shadowRayQueue->Size())
         return;
 
@@ -266,8 +267,8 @@ extern "C" __global__ void __miss__shadow() {
 }
 
 extern "C" __global__ void __raygen__shadow_Tr() {
-    PBRT_DBG("raygen shadow tr %d\n", optixGetLaunchIndex().x);
-    int index = optixGetLaunchIndex().x;
+    PBRT_DBG("raygen shadow tr %d\n", vibeoptix::device::launchIndexX());
+    int index = vibeoptix::device::launchIndexX();
     if (index >= params.shadowRayQueue->Size())
         return;
 
@@ -479,7 +480,7 @@ struct RandomHitPayload {
 
 extern "C" __global__ void __raygen__randomHit() {
     // Keep as uint32_t so can pass directly to optixTrace.
-    uint32_t index = optixGetLaunchIndex().x;
+    uint32_t index = vibeoptix::device::launchIndexX();
     if (index >= params.subsurfaceScatterQueue->Size())
         return;
 

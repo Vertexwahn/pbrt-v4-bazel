@@ -16,7 +16,7 @@ using namespace pbrt;
 
 void usage(const std::string &msg = "") {
     if (!msg.empty())
-        fprintf(stderr, "pbrt_test: %s\n\n", msg.c_str());
+        fprintf(stderr, "pbrt_test_main: %s\n\n", msg.c_str());
 
     fprintf(stderr, R"(pbrt_test arguments:
   --list-tests                List all tests.

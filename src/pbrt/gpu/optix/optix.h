@@ -16,7 +16,7 @@
 #include <pbrt/wavefront/workitems.h>
 #include <pbrt/wavefront/workqueue.h>
 
-#include <optix.h>
+#include <pbrt/gpu/vibeoptix/compat.h>
 
 namespace pbrt {
 

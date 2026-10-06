@@ -25,9 +25,7 @@
 #include <mutex>
 #include <unordered_map>
 
-#include <optix.h>
-#include <optix_function_table_definition.h>
-#include <optix_stubs.h>
+#include <pbrt/gpu/vibeoptix/compat.h>
 
 #ifdef NVTX
 #ifdef UNICODE
@@ -1053,12 +1051,12 @@ OptixPipelineCompileOptions OptiXAggregate::getPipelineCompileOptions() {
     OptixPipelineCompileOptions pipelineCompileOptions = {};
     pipelineCompileOptions.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_ANY;
     pipelineCompileOptions.usesMotionBlur = false;
-    pipelineCompileOptions.numPayloadValues = 3;
+    pipelineCompileOptions.numPayloadValues = 0;
     pipelineCompileOptions.numAttributeValues = 4;
     // OPTIX_EXCEPTION_FLAG_NONE;
     pipelineCompileOptions.exceptionFlags =
         (OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW | OPTIX_EXCEPTION_FLAG_TRACE_DEPTH);
-#if (OPTIX_VERSION < 80000)
+#if (VIBEOPTIX_API_VERSION < 80000)
     // This flag is removed since OptiX 8.0.0
     pipelineCompileOptions.exceptionFlags |= OPTIX_EXCEPTION_FLAG_DEBUG;
 #endif
@@ -1070,15 +1068,32 @@ OptixPipelineCompileOptions OptiXAggregate::getPipelineCompileOptions() {
 OptixModule OptiXAggregate::createOptiXModule(OptixDeviceContext optixContext,
                                               const char *ptx) {
     OptixModuleCompileOptions moduleCompileOptions = {};
+    static constexpr unsigned int payloadSemantics[] = {
+        vibeoptix::PAYLOAD_SEMANTICS_TRACE_CALLER_READ_WRITE |
+            vibeoptix::PAYLOAD_SEMANTICS_CH_READ_WRITE |
+            vibeoptix::PAYLOAD_SEMANTICS_MS_READ_WRITE |
+            vibeoptix::PAYLOAD_SEMANTICS_AH_READ_WRITE,
+        vibeoptix::PAYLOAD_SEMANTICS_TRACE_CALLER_READ_WRITE |
+            vibeoptix::PAYLOAD_SEMANTICS_CH_READ_WRITE |
+            vibeoptix::PAYLOAD_SEMANTICS_MS_READ_WRITE |
+            vibeoptix::PAYLOAD_SEMANTICS_AH_READ_WRITE,
+        vibeoptix::PAYLOAD_SEMANTICS_TRACE_CALLER_READ_WRITE |
+            vibeoptix::PAYLOAD_SEMANTICS_CH_READ_WRITE |
+            vibeoptix::PAYLOAD_SEMANTICS_MS_READ_WRITE |
+            vibeoptix::PAYLOAD_SEMANTICS_AH_READ_WRITE,
+    };
+    static constexpr vibeoptix::PayloadType payloadType{3, payloadSemantics};
     // TODO: REVIEW THIS
     moduleCompileOptions.maxRegisterCount = OPTIX_COMPILE_DEFAULT_MAX_REGISTER_COUNT;
+    moduleCompileOptions.numPayloadTypes = 1;
+    moduleCompileOptions.payloadTypes = &payloadType;
 #ifndef NDEBUG
     moduleCompileOptions.optLevel = OPTIX_COMPILE_OPTIMIZATION_LEVEL_0;
-#if (OPTIX_VERSION >= 70400)
+#if (VIBEOPTIX_API_VERSION >= 70400)
     moduleCompileOptions.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_MODERATE;
 #else
     moduleCompileOptions.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_LINEINFO;
-#endif  // OPTIX_VERSION
+#endif  // VIBEOPTIX_API_VERSION
 #else
     moduleCompileOptions.optLevel = OPTIX_COMPILE_OPTIMIZATION_DEFAULT;
     moduleCompileOptions.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_NONE;
@@ -1094,7 +1109,7 @@ OptixModule OptiXAggregate::createOptiXModule(OptixDeviceContext optixContext,
     size_t logSize = sizeof(log);
     OptixModule optixModule;
 
-#if (OPTIX_VERSION >= 70700)
+#if (VIBEOPTIX_API_VERSION >= 70700)
 #define OPTIX_MODULE_CREATE_FN optixModuleCreate
 #else
 #define OPTIX_MODULE_CREATE_FN optixModuleCreateFromPTX
@@ -1229,13 +1244,14 @@ OptiXAggregate::OptiXAggregate(
     ctxOptions.logCallbackLevel = 2;  // error
 #endif
     ctxOptions.logCallbackFunction = logCallback;
-#if (OPTIX_VERSION >= 70200) && !defined(NDEBUG)
+#if (VIBEOPTIX_API_VERSION >= 70200) && !defined(NDEBUG)
     ctxOptions.validationMode = OPTIX_DEVICE_CONTEXT_VALIDATION_MODE_ALL;
 #endif
     OPTIX_CHECK(optixDeviceContextCreate(cudaContext, &ctxOptions, &optixContext));
 
-    LOG_VERBOSE("Optix version %d.%d.%d successfully initialized", OPTIX_VERSION / 10000,
-                (OPTIX_VERSION % 10000) / 100, OPTIX_VERSION % 100);
+    LOG_VERBOSE("VibeOptiX API version %d.%d.%d successfully initialized",
+                VIBEOPTIX_API_VERSION / 10000,
+                (VIBEOPTIX_API_VERSION % 10000) / 100, VIBEOPTIX_API_VERSION % 100);
 
     // OptiX module
     optixModule = createOptiXModule(optixContext, (const char *)PBRT_EMBEDDED_PTX);
@@ -1296,13 +1312,13 @@ OptiXAggregate::OptiXAggregate(
 
     OptixPipelineLinkOptions pipelineLinkOptions = {};
     pipelineLinkOptions.maxTraceDepth = 2;
-#if (OPTIX_VERSION < 70700)
+#if (VIBEOPTIX_API_VERSION < 70700)
 #ifndef NDEBUG
     pipelineLinkOptions.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
 #else
     pipelineLinkOptions.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_NONE;
 #endif
-#endif // OPTIX_VERSION
+#endif // VIBEOPTIX_API_VERSION
 
     OPTIX_CHECK_WITH_LOG(
         optixPipelineCreate(optixContext, &pipelineCompileOptions, &pipelineLinkOptions,

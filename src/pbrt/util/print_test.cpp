@@ -11,7 +11,8 @@
 #include <pbrt/util/transform.h>
 #include <pbrt/util/vecmath.h>
 
-#include <double-conversion/double-conversion.h>
+#include "double-conversion/double-conversion.h"
+
 #include <array>
 #include <sstream>
 #include <typeinfo>

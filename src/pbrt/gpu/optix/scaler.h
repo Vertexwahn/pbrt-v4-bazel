@@ -10,7 +10,7 @@
 #include <pbrt/util/color.h>
 #include <pbrt/util/vecmath.h>
 
-#include <optix.h>
+#include <pbrt/gpu/vibeoptix/compat.h>
 
 namespace pbrt {
 
