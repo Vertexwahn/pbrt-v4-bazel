@@ -1,0 +1,15 @@
+"""double-conversion - https://github.com/google/double-conversion"""
+
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+cc_library(
+    name = "double-conversion",
+    srcs = glob(["double-conversion/*.cc"]),
+    hdrs = glob(["double-conversion/*.h"]),
+    includes = ["."],
+    linkopts = select({
+        "@platforms//os:windows": [],
+        "//conditions:default": ["-lm"],
+    }),
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,31 @@
+package(default_visibility = ["//visibility:public"])
+
+alias(
+    name = "pbrt",
+    actual = "//src:pbrt",
+)
+
+alias(
+    name = "imgtool",
+    actual = "//src:imgtool",
+)
+
+alias(
+    name = "plytool",
+    actual = "//src:plytool",
+)
+
+alias(
+    name = "pspec",
+    actual = "//src:pspec",
+)
+
+alias(
+    name = "nanovdb2pbrt",
+    actual = "//src:nanovdb2pbrt",
+)
+
+alias(
+    name = "cyhair2pbrt",
+    actual = "//src:cyhair2pbrt",
+)

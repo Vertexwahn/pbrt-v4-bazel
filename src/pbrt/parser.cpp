@@ -18,7 +18,7 @@
 #include <pbrt/util/stats.h>
 #include <pbrt/util/string.h>
 
-#include <double-conversion/double-conversion.h>
+#include "double-conversion/double-conversion.h"
 
 #include <cctype>
 #include <cstdio>

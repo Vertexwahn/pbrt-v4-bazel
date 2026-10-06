@@ -6,7 +6,7 @@
 
 #include <pbrt/util/check.h>
 
-#include <double-conversion/double-conversion.h>
+#include "double-conversion/double-conversion.h"
 
 namespace pbrt {
 

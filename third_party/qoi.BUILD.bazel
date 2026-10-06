@@ -1,0 +1,10 @@
+"""QOI - https://github.com/phoboslab/qoi"""
+
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+cc_library(
+    name = "qoi",
+    hdrs = ["qoi.h"],
+    includes = ["."],
+    visibility = ["//visibility:public"],
+)

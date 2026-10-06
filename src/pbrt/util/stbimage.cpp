@@ -7,6 +7,8 @@
 #define STBI_NO_PNG
 // too old school
 #define STBI_NO_PIC
+#ifndef STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_IMPLEMENTATION
+#endif
 #define STBI_ASSERT CHECK
-#include <stb/stb_image.h>
+#include "stb_image.h"

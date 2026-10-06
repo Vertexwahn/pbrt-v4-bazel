@@ -1,0 +1,13 @@
+"""utf8proc - https://github.com/JuliaStrings/utf8proc"""
+
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+cc_library(
+    name = "utf8proc",
+    srcs = ["utf8proc.c"],
+    hdrs = ["utf8proc.h"],
+    defines = ["UTF8PROC_STATIC"],
+    includes = ["."],
+    textual_hdrs = ["utf8proc_data.c"],
+    visibility = ["//visibility:public"],
+)

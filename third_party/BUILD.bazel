@@ -1,0 +1,7 @@
+exports_files([
+    "double-conversion.BUILD.bazel",
+    "filesystem.BUILD.bazel",
+    "ptex.BUILD.bazel",
+    "qoi.BUILD.bazel",
+    "utf8proc.BUILD.bazel",
+])

@@ -1,0 +1,214 @@
+"""pbrt-v4 - physically based rendering system."""
+
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+config_setting(
+    name = "dbg",
+    values = {"compilation_mode": "dbg"},
+)
+
+# Mirrors PBRT_DEFINITIONS from the CMake build (the results of the
+# check_cxx_source_compiles() probes are hard-coded per platform here).
+PBRT_DEFINES = ["PTEX_STATIC"] + select({
+    "@platforms//os:windows": [
+        "PBRT_IS_WINDOWS",
+        "PBRT_IS_MSVC",
+        "NOMINMAX",
+        "_CRT_SECURE_NO_WARNINGS",
+        "_ENABLE_EXTENDED_ALIGNED_STORAGE",
+        "PBRT_HAS_INTRIN_H",
+        "PBRT_HAVE__ALIGNED_MALLOC",
+        "PBRT_NOINLINE=__declspec(noinline)",
+        "PBRT_RESTRICT=__restrict",
+    ],
+    "@platforms//os:macos": [
+        "PBRT_IS_OSX",
+        "PBRT_HAVE_MMAP",
+        "PBRT_HAVE_POSIX_MEMALIGN",
+        "PBRT_NOINLINE=__attribute__((noinline))",
+        "PBRT_RESTRICT=__restrict__",
+    ],
+    "//conditions:default": [
+        "PBRT_IS_LINUX",
+        "PBRT_HAVE_MMAP",
+        "PBRT_HAVE_POSIX_MEMALIGN",
+        "PBRT_NOINLINE=__attribute__((noinline))",
+        "PBRT_RESTRICT=__restrict__",
+    ],
+}) + select({
+    ":dbg": ["PBRT_DEBUG_BUILD"],
+    "//conditions:default": [],
+})
+
+PBRT_LINKOPTS = select({
+    "@platforms//os:windows": [
+        "-DEFAULTLIB:dbghelp.lib",
+        "-DEFAULTLIB:wsock32.lib",
+        "-DEFAULTLIB:ws2_32.lib",
+    ],
+    "@platforms//os:linux": [
+        "-pthread",
+        "-ldl",
+        "-rdynamic",
+    ],
+    "//conditions:default": ["-pthread"],
+})
+
+# ---------------------------------------------------------------------------
+# Code generators
+# ---------------------------------------------------------------------------
+
+# Structure-of-arrays code generator; emits the generated header on stdout.
+cc_binary(
+    name = "soac",
+    srcs = ["pbrt/cmd/soac.cpp"],
+)
+
+genrule(
+    name = "pbrt_soa_header",
+    srcs = ["pbrt/pbrt.soa"],
+    outs = ["pbrt_soa.h"],
+    cmd = "$(execpath :soac) $(execpath pbrt/pbrt.soa) > $@",
+    cmd_bat = "$(execpath :soac) $(execpath pbrt/pbrt.soa) > $@",
+    tools = [":soac"],
+)
+
+genrule(
+    name = "wavefront_workitems_soa_header",
+    srcs = ["pbrt/wavefront/workitems.soa"],
+    outs = ["wavefront_workitems_soa.h"],
+    cmd = "$(execpath :soac) $(execpath pbrt/wavefront/workitems.soa) > $@",
+    cmd_bat = "$(execpath :soac) $(execpath pbrt/wavefront/workitems.soa) > $@",
+    tools = [":soac"],
+)
+
+# Fits the RGB -> reflectance spectrum tables used by pbrt's colour handling.
+cc_binary(
+    name = "rgb2spec_opt",
+    srcs = ["pbrt/cmd/rgb2spec_opt.cpp"],
+    linkopts = select({
+        "@platforms//os:windows": [],
+        "//conditions:default": ["-pthread"],
+    }),
+)
+
+RGB_TO_SPECTRUM_TABLES = {
+    "aces": "ACES2065_1",
+    "dci_p3": "DCI_P3",
+    "rec2020": "REC2020",
+    "srgb": "sRGB",
+}
+
+[
+    genrule(
+        name = "rgbspectrum_%s_source" % name,
+        outs = ["rgbspectrum_%s.cpp" % name],
+        cmd = "$(execpath :rgb2spec_opt) 64 $@ " + colorspace,
+        cmd_bat = "$(execpath :rgb2spec_opt) 64 $@ " + colorspace,
+        tools = [":rgb2spec_opt"],
+    )
+    for name, colorspace in RGB_TO_SPECTRUM_TABLES.items()
+]
+
+# ---------------------------------------------------------------------------
+# pbrt library
+# ---------------------------------------------------------------------------
+
+cc_library(
+    name = "pbrt_lib",
+    srcs = glob(
+        [
+            "pbrt/*.cpp",
+            "pbrt/cpu/*.cpp",
+            "pbrt/util/*.cpp",
+            "pbrt/wavefront/*.cpp",
+        ],
+        exclude = ["**/*_test.cpp"],
+    ) + [
+        "pbrt/cmd/pspec_gpu.cpp",
+    ] + ["rgbspectrum_%s.cpp" % name for name in RGB_TO_SPECTRUM_TABLES],
+    hdrs = glob(["pbrt/**/*.h"]) + [
+        "pbrt_soa.h",
+        "wavefront_workitems_soa.h",
+    ],
+    defines = PBRT_DEFINES,
+    includes = ["."],
+    linkopts = PBRT_LINKOPTS,
+    deps = [
+        "//src/ext:glad",
+        "//src/ext:rply",
+        "@double-conversion",
+        "@filesystem",
+        "@glfw",
+        "@googletest//:gtest",
+        "@libdeflate",
+        "@lodepng",
+        "@openexr",
+        "@openvdb//:nanovdb",
+        "@ptex",
+        "@qoi",
+        "@stb//:stb_image",
+        "@utf8proc",
+    ],
+)
+
+# ---------------------------------------------------------------------------
+# Executables
+# ---------------------------------------------------------------------------
+
+cc_binary(
+    name = "pbrt",
+    srcs = ["pbrt/cmd/pbrt.cpp"],
+    deps = [":pbrt_lib"],
+)
+
+cc_binary(
+    name = "imgtool",
+    srcs = ["pbrt/cmd/imgtool.cpp"],
+    deps = [
+        ":pbrt_lib",
+        "//src/ext:flip",
+        "//src/ext:skymodel",
+    ],
+)
+
+cc_binary(
+    name = "pspec",
+    srcs = ["pbrt/cmd/pspec.cpp"],
+    deps = [":pbrt_lib"],
+)
+
+cc_binary(
+    name = "plytool",
+    srcs = ["pbrt/cmd/plytool.cpp"],
+    deps = [":pbrt_lib"],
+)
+
+cc_binary(
+    name = "nanovdb2pbrt",
+    srcs = ["pbrt/cmd/nanovdb2pbrt.cpp"],
+    deps = [":pbrt_lib"],
+)
+
+cc_binary(
+    name = "cyhair2pbrt",
+    srcs = ["pbrt/cmd/cyhair2pbrt.cpp"],
+)
+
+# ---------------------------------------------------------------------------
+# Unit tests
+# ---------------------------------------------------------------------------
+
+cc_test(
+    name = "pbrt_test",
+    size = "enormous",
+    srcs = glob(["pbrt/**/*_test.cpp"]),
+    deps = [
+        ":pbrt_lib",
+        "@googletest//:gtest",
+    ],
+)
